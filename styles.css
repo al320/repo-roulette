@@ -1,0 +1,497 @@
+/* ==========================================================================
+   Repo Roulette - Stylesheet
+   Minimalist, developer-focused aesthetic
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Design Tokens & CSS Custom Properties
+   -------------------------------------------------------------------------- */
+:root {
+  /* Color Palette */
+  --bg-color: #090909;
+  --surface-color: #121212;
+  --surface-hover: #181818;
+  --border-color: #242424;
+  --border-highlight: #383838;
+
+  /* Typography Colors */
+  --text-primary: #ededed;
+  --text-secondary: #8a8a8a;
+  --text-muted: #585858;
+
+  /* Button Accent */
+  --btn-bg: #f4f4f5;
+  --btn-text: #090909;
+  --btn-hover-bg: #ffffff;
+  --btn-active-bg: #e4e4e7;
+
+  /* Status Colors */
+  --status-loading: #a1a1aa;
+  --status-error-text: #f87171;
+  --status-error-bg: rgba(239, 68, 68, 0.1);
+  --status-error-border: rgba(239, 68, 68, 0.25);
+  --status-warning-text: #fbbf24;
+  --status-warning-bg: rgba(245, 158, 11, 0.1);
+  --status-warning-border: rgba(245, 158, 11, 0.25);
+  --status-success-text: #34d399;
+  --status-success-bg: rgba(16, 185, 129, 0.1);
+  --status-success-border: rgba(16, 185, 129, 0.25);
+
+  /* Typography System */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Sizing & Spacing */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+  --max-content-width: 580px;
+
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* --------------------------------------------------------------------------
+   2. Reset & Base Setup
+   -------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg-color);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+}
+
+/* --------------------------------------------------------------------------
+   3. Main Application Container & Layout
+   -------------------------------------------------------------------------- */
+.app-container {
+  width: 100%;
+  max-width: var(--max-content-width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+/* --------------------------------------------------------------------------
+   4. Header & Branding
+   -------------------------------------------------------------------------- */
+.app-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#app-title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  line-height: 1.15;
+}
+
+.app-tagline {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+  max-width: 380px;
+  line-height: 1.45;
+}
+
+/* --------------------------------------------------------------------------
+   5. Main Content & Primary Action
+   -------------------------------------------------------------------------- */
+#main-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+}
+
+.action-group {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.randomize-button {
+  background-color: var(--btn-bg);
+  color: var(--btn-text);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding: 0.75rem 1.85rem;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition:
+    background-color var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    opacity var(--transition-fast);
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.randomize-button:hover:not(:disabled) {
+  background-color: var(--btn-hover-bg);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.randomize-button:active:not(:disabled) {
+  background-color: var(--btn-active-bg);
+  transform: translateY(1px) scale(0.98);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.randomize-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.randomize-button:disabled::after {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(9, 9, 9, 0.25);
+  border-top-color: var(--btn-text);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-left: 0.25rem;
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   6. Status Region
+   -------------------------------------------------------------------------- */
+.status-region {
+  min-height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.status-region:empty {
+  display: none;
+}
+
+/* Status variants for future script injection */
+.status-message {
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  width: 100%;
+  animation: fadeIn var(--transition-normal);
+  line-height: 1.45;
+  word-break: break-word;
+  transition: opacity 300ms ease-out;
+}
+
+.status-message.status-fade-out {
+  opacity: 0;
+}
+
+.status-loading {
+  color: var(--status-loading);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.status-loading::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-highlight);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+.status-error {
+  color: var(--status-error-text);
+  background-color: var(--status-error-bg);
+  border: 1px solid var(--status-error-border);
+}
+
+.status-warning {
+  color: var(--status-warning-text);
+  background-color: var(--status-warning-bg);
+  border: 1px solid var(--status-warning-border);
+}
+
+.status-success {
+  color: var(--status-success-text);
+  background-color: var(--status-success-bg);
+  border: 1px solid var(--status-success-border);
+}
+
+/* --------------------------------------------------------------------------
+   7. Repository Result Section & Container
+   -------------------------------------------------------------------------- */
+.result-section {
+  width: 100%;
+}
+
+.result-container {
+  background-color: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 2rem 1.75rem;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  transition:
+    border-color var(--transition-normal),
+    background-color var(--transition-normal);
+  position: relative;
+  overflow: hidden;
+}
+
+.result-container:hover {
+  border-color: var(--border-highlight);
+}
+
+/* Empty State */
+.empty-state-message {
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 0.95rem;
+  font-style: normal;
+  letter-spacing: -0.01em;
+  padding: 1.5rem 1rem;
+  user-select: none;
+}
+
+/* --------------------------------------------------------------------------
+   8. Future Repository Card Styles (Ready for Phase 3/4)
+   -------------------------------------------------------------------------- */
+.repo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+  animation: cardEntrance 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.repo-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.repo-owner {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: lowercase;
+}
+
+.repo-name {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.repo-name a {
+  color: inherit;
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+.repo-name a:hover {
+  color: var(--btn-hover-bg);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.repo-description {
+  font-size: 0.925rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.repo-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.825rem;
+  color: var(--text-secondary);
+}
+
+.repo-stat,
+.repo-language {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lang-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--status-loading);
+  display: inline-block;
+}
+
+.repo-link-action {
+  margin-left: auto;
+  font-size: 0.825rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: opacity var(--transition-fast);
+}
+
+.repo-link-action:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* --------------------------------------------------------------------------
+   9. Accessibility & Focus Indicators
+   -------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 3px;
+}
+
+/* --------------------------------------------------------------------------
+   10. Keyframes & Animation
+   -------------------------------------------------------------------------- */
+@keyframes cardEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   11. Responsiveness & Media Queries
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+  body {
+    padding: 1.5rem 1rem;
+    align-items: flex-start;
+  }
+
+  .app-container {
+    gap: 1.75rem;
+    margin-top: 1rem;
+  }
+
+  #app-title {
+    font-size: 1.85rem;
+  }
+
+  .app-tagline {
+    font-size: 0.875rem;
+  }
+
+  .result-container {
+    padding: 1.5rem 1.25rem;
+    min-height: 190px;
+  }
+
+  .repo-name {
+    font-size: 1.2rem;
+  }
+
+  .repo-meta {
+    gap: 0.875rem;
+  }
+
+  .repo-link-action {
+    width: 100%;
+    margin-left: 0;
+    margin-top: 0.25rem;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   12. Motion Reduction (a11y)
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
