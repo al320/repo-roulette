@@ -13,7 +13,8 @@
 // -----------------------------------------------------------------------------
 
 /** Versioned sessionStorage key for candidate pool and selection state */
-const STORAGE_KEY = 'repo_roulette_state_v1';
+const STORAGE_KEY = 'repo_roulette_state_v2';
+const STORAGE_KEY_V1 = 'repo_roulette_state_v1';
 
 /** GitHub Search API endpoint */
 const GITHUB_API_URL = 'https://api.github.com/search/repositories';
@@ -30,6 +31,7 @@ const FADE_OUT_DURATION_MS = 300;
 
 /** Default filter settings */
 const DEFAULT_MIN_STARS = 500;
+const DEFAULT_MAX_STARS = 100000;
 const DEFAULT_LANGUAGE = '';
 
 /** Supported programming language qualifiers */
@@ -40,13 +42,15 @@ const ALLOWED_LANGUAGES = ['', 'python', 'javascript', 'typescript', 'java', 'cp
 // -----------------------------------------------------------------------------
 
 const state = {
-  minStars: DEFAULT_MIN_STARS, // Applied minimum-star value
-  language: DEFAULT_LANGUAGE,  // Applied programming language qualifier
-  candidates: [],              // Array of normalized repository candidate objects remaining in current pool
-  displayedIds: [],            // Array of repository IDs already shown to avoid duplicates
-  nextPage: 1,                 // Next API page number to retrieve when pool is depleted
-  maxPage: MAX_PAGE_LIMIT,     // Upper bound of available pages for this query
-  currentRepo: null            // Most recently selected repository (restored on refresh)
+  minStars: DEFAULT_MIN_STARS,       // Applied minimum-star value
+  maxStars: DEFAULT_MAX_STARS,       // Applied maximum-star value
+  language: DEFAULT_LANGUAGE,        // Applied programming language qualifier
+  candidates: [],                    // Array of normalized repository candidate objects remaining in current pool
+  displayedIds: [],                  // Session-wide array of repository IDs already shown to avoid duplicates
+  nextPage: 1,                       // Next API page number to retrieve when pool is depleted
+  maxPage: MAX_PAGE_LIMIT,           // Upper bound of available pages for this query
+  unvisitedPages: [],                // Accessible pages not yet fetched in current discovery cycle
+  currentRepo: null                  // Most recently selected repository (restored on refresh)
 };
 
 /** Request lock to prevent multiple concurrent API or selection calls */
@@ -93,43 +97,85 @@ function normalizeRepository(raw) {
 // -----------------------------------------------------------------------------
 
 /**
- * Validates the minimum stars input value.
- * Allows non-negative whole numbers (0, 1, 2, ...).
+ * Validates a single star count input (minimum or maximum).
+ * Accepts non-negative whole numbers (0, 1, 2, ...).
  * Rejects empty, negative, decimal or invalid values and provides a descriptive message.
  * @param {string|number} rawValue - Raw input from number field.
+ * @param {string} fieldName - Descriptive name of the field for error reporting.
  * @returns {{ valid: boolean, value?: number, error?: string }} Validation result.
  */
-function validateMinStars(rawValue) {
+function validateStarInput(rawValue, fieldName = 'Stars') {
   if (rawValue === null || rawValue === undefined) {
-    return { valid: false, error: 'Please enter a minimum star count.' };
+    return { valid: false, error: `Please enter a ${fieldName.toLowerCase()} count.` };
   }
 
   const str = String(rawValue).trim();
   if (str === '') {
-    return { valid: false, error: 'Please enter a minimum star count.' };
+    return { valid: false, error: `Please enter a ${fieldName.toLowerCase()} count.` };
   }
 
   // Reject decimal values
   if (str.includes('.')) {
-    return { valid: false, error: 'Minimum stars must be a whole number.' };
+    return { valid: false, error: `${fieldName} must be a whole number.` };
   }
 
   // Reject negative values
   if (str.startsWith('-')) {
-    return { valid: false, error: 'Minimum stars must be 0 or greater.' };
+    return { valid: false, error: `${fieldName} must be 0 or greater.` };
   }
 
   // Reject anything that is not solely ASCII digits
   if (!/^\d+$/.test(str)) {
-    return { valid: false, error: 'Minimum stars must be a valid whole number.' };
+    return { valid: false, error: `${fieldName} must be a valid whole number.` };
   }
 
   const parsed = Number(str);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    return { valid: false, error: 'Minimum stars must be a valid non-negative integer.' };
+    return { valid: false, error: `${fieldName} must be a valid non-negative integer.` };
   }
 
   return { valid: true, value: parsed };
+}
+
+/**
+ * Validates the minimum and maximum star range.
+ * Ensures both are valid non-negative whole numbers and maximum >= minimum.
+ * @param {string|number} rawMin - Raw minimum stars value.
+ * @param {string|number} rawMax - Raw maximum stars value.
+ * @returns {{ valid: boolean, minStars?: number, maxStars?: number, error?: string }} Validation result.
+ */
+function validateStarRange(rawMin, rawMax) {
+  const minResult = validateStarInput(rawMin, 'Minimum stars');
+  if (!minResult.valid) {
+    return { valid: false, error: minResult.error };
+  }
+
+  const maxResult = validateStarInput(rawMax, 'Maximum stars');
+  if (!maxResult.valid) {
+    return { valid: false, error: maxResult.error };
+  }
+
+  if (maxResult.value < minResult.value) {
+    return {
+      valid: false,
+      error: 'Maximum stars must be greater than or equal to minimum stars.'
+    };
+  }
+
+  return {
+    valid: true,
+    minStars: minResult.value,
+    maxStars: maxResult.value
+  };
+}
+
+/**
+ * Backward compatibility wrapper for minimum star validation.
+ * @param {string|number} rawValue - Raw input from number field.
+ * @returns {{ valid: boolean, value?: number, error?: string }} Validation result.
+ */
+function validateMinStars(rawValue) {
+  return validateStarInput(rawValue, 'Minimum stars');
 }
 
 /**
@@ -143,25 +189,32 @@ function getCutoffDate() {
 }
 
 /**
- * Constructs the GitHub Search API URL with dynamic minimum stars,
+ * Constructs the GitHub Search API URL with dynamic star range (stars:min..max),
  * pushed cutoff date, and optional programming language qualifier.
  * @param {number} page - Page number to request.
  * @param {number} minStars - Validated minimum star count.
+ * @param {number} maxStars - Validated maximum star count.
  * @param {string} language - Programming language qualifier (empty string for all).
  * @returns {string} Fully formed API URL.
  */
-function buildApiUrl(page = 1, minStars = state.minStars, language = state.language) {
-  const starValidation = validateMinStars(minStars);
-  if (!starValidation.valid) {
-    throw new Error(starValidation.error);
+function buildApiUrl(
+  page = 1,
+  minStars = state.minStars,
+  maxStars = state.maxStars,
+  language = state.language
+) {
+  const rangeValidation = validateStarRange(minStars, maxStars);
+  if (!rangeValidation.valid) {
+    throw new Error(rangeValidation.error);
   }
-  const safeMinStars = starValidation.value;
+  const safeMin = rangeValidation.minStars;
+  const safeMax = rangeValidation.maxStars;
 
   const cutoffDate = getCutoffDate();
   const safePage = Math.max(1, Math.min(MAX_PAGE_LIMIT, Math.floor(page)));
 
   const queryParts = [
-    `stars:>=${safeMinStars}`,
+    `stars:${safeMin}..${safeMax}`,
     `pushed:>=${cutoffDate}`
   ];
 
@@ -191,11 +244,13 @@ function saveSessionState() {
   try {
     const payload = JSON.stringify({
       minStars: state.minStars,
+      maxStars: state.maxStars,
       language: state.language,
       candidates: state.candidates,
       displayedIds: state.displayedIds,
       nextPage: state.nextPage,
       maxPage: state.maxPage,
+      unvisitedPages: state.unvisitedPages,
       currentRepo: state.currentRepo
     });
     sessionStorage.setItem(STORAGE_KEY, payload);
@@ -207,40 +262,82 @@ function saveSessionState() {
 /**
  * Restores application state from sessionStorage.
  * Validates data integrity and resets gracefully if corrupted.
+ * Automatically migrates session-wide displayedIds from legacy v1 schema without restoring
+ * mismatched candidates.
  * @returns {boolean} True if valid state was restored, false otherwise.
  */
 function loadSessionState() {
   try {
-    const rawData = sessionStorage.getItem(STORAGE_KEY);
+    let rawData = sessionStorage.getItem(STORAGE_KEY);
+    let isV1 = false;
+
+    // Safe migration check for legacy v1 storage key
+    if (!rawData) {
+      rawData = sessionStorage.getItem(STORAGE_KEY_V1);
+      if (rawData) {
+        isV1 = true;
+      }
+    }
+
     if (!rawData) return false;
 
     const parsed = JSON.parse(rawData);
 
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      Array.isArray(parsed.candidates) &&
-      Array.isArray(parsed.displayedIds) &&
-      Number.isInteger(parsed.nextPage) &&
-      parsed.nextPage >= 1
-    ) {
-      // Validate minStars from storage
-      const starValidation = validateMinStars(parsed.minStars);
-      const minStars = starValidation.valid ? starValidation.value : DEFAULT_MIN_STARS;
+    if (parsed && typeof parsed === 'object') {
+      // Validate stars
+      const rangeValidation = validateStarRange(
+        parsed.minStars !== undefined ? parsed.minStars : DEFAULT_MIN_STARS,
+        parsed.maxStars !== undefined ? parsed.maxStars : DEFAULT_MAX_STARS
+      );
+
+      const minStars = rangeValidation.valid ? rangeValidation.minStars : DEFAULT_MIN_STARS;
+      const maxStars = rangeValidation.valid ? rangeValidation.maxStars : DEFAULT_MAX_STARS;
 
       // Validate language from storage
       const language = typeof parsed.language === 'string' && ALLOWED_LANGUAGES.includes(parsed.language)
         ? parsed.language
         : DEFAULT_LANGUAGE;
 
+      // Restore session-wide displayed repository IDs
+      const displayedIds = Array.isArray(parsed.displayedIds)
+        ? parsed.displayedIds.filter((id) => typeof id === 'number' || typeof id === 'string')
+        : [];
+
       state.minStars = minStars;
+      state.maxStars = maxStars;
       state.language = language;
-      state.candidates = parsed.candidates.map(normalizeRepository).filter(Boolean);
-      state.displayedIds = parsed.displayedIds.filter((id) => typeof id === 'number' || typeof id === 'string');
-      state.nextPage = Math.min(MAX_PAGE_LIMIT, parsed.nextPage);
+      state.displayedIds = displayedIds;
+
+      // If migrating from legacy v1, candidates lacked maxStars validation, so clear candidates
+      if (isV1) {
+        state.candidates = [];
+        state.nextPage = 1;
+        state.maxPage = MAX_PAGE_LIMIT;
+        state.unvisitedPages = [];
+        state.currentRepo = null;
+        try {
+          sessionStorage.removeItem(STORAGE_KEY_V1);
+        } catch (_) {}
+        saveSessionState();
+        return true;
+      }
+
+      state.candidates = Array.isArray(parsed.candidates)
+        ? parsed.candidates.map(normalizeRepository).filter(Boolean)
+        : [];
+
+      state.nextPage = Number.isInteger(parsed.nextPage) && parsed.nextPage >= 1
+        ? Math.min(MAX_PAGE_LIMIT, parsed.nextPage)
+        : 1;
+
       state.maxPage = Number.isInteger(parsed.maxPage) && parsed.maxPage >= 1
         ? Math.min(MAX_PAGE_LIMIT, parsed.maxPage)
         : MAX_PAGE_LIMIT;
+
+      state.unvisitedPages = Array.isArray(parsed.unvisitedPages)
+        ? parsed.unvisitedPages.filter((p) => Number.isInteger(p) && p >= 1 && p <= MAX_PAGE_LIMIT)
+        : [];
+
       state.currentRepo = normalizeRepository(parsed.currentRepo);
       return true;
     }
@@ -250,15 +347,18 @@ function loadSessionState() {
 
   // Fallback to clean state
   state.minStars = DEFAULT_MIN_STARS;
+  state.maxStars = DEFAULT_MAX_STARS;
   state.language = DEFAULT_LANGUAGE;
   state.candidates = [];
   state.displayedIds = [];
   state.nextPage = 1;
   state.maxPage = MAX_PAGE_LIMIT;
+  state.unvisitedPages = [];
   state.currentRepo = null;
 
   try {
     sessionStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(STORAGE_KEY_V1);
   } catch (_) {
     // Ignore removal errors
   }
@@ -339,19 +439,19 @@ function clearStatus() {
 
 /**
  * Fetches a batch of 100 repository candidates from the GitHub API.
- * Handles rate limits, network failures, and pagination boundaries.
+ * Excludes repositories in the session-wide displayedIds history.
+ * Distributes requests across accessible pages to prevent descending-star bias.
+ * Restarts the discovery cycle if all matching repositories have been displayed.
  * @param {number} retryCount - Safety counter to prevent unbounded recursion.
  * @returns {Promise<Array<object>>} Filtered non-duplicate repository candidates.
  */
 async function fetchCandidatesBatch(retryCount = 0) {
-  // If we have exhausted all available pages within the 1,000 search limit, reset history
-  if (state.nextPage > state.maxPage || state.nextPage > MAX_PAGE_LIMIT) {
-    state.displayedIds = [];
-    state.nextPage = 1;
+  let targetPage = state.nextPage;
+  if (!Number.isInteger(targetPage) || targetPage < 1 || targetPage > state.maxPage || targetPage > MAX_PAGE_LIMIT) {
+    targetPage = 1;
   }
 
-  const targetPage = state.nextPage;
-  const requestUrl = buildApiUrl(targetPage, state.minStars, state.language);
+  const requestUrl = buildApiUrl(targetPage, state.minStars, state.maxStars, state.language);
 
   let response;
   try {
@@ -400,8 +500,8 @@ async function fetchCandidatesBatch(retryCount = 0) {
 
   // Handle pagination limits or invalid queries (HTTP 422)
   if (response.status === 422) {
-    state.displayedIds = [];
     state.nextPage = 1;
+    state.unvisitedPages = [];
     throw new Error('Search result limit reached. Starting fresh from page 1 on your next spin.');
   }
 
@@ -434,37 +534,52 @@ async function fetchCandidatesBatch(retryCount = 0) {
   // If search returns 0 items
   if (data.items.length === 0) {
     if (targetPage > 1) {
-      // Reached end of available results earlier than anticipated; recycle
-      state.displayedIds = [];
+      // Reached an empty page beyond results; reset to page 1 and retry safely
       state.nextPage = 1;
+      state.unvisitedPages = [];
       state.maxPage = Math.max(1, targetPage - 1);
       if (retryCount < 2) {
         return await fetchCandidatesBatch(retryCount + 1);
       }
     }
-    throw new Error('No repositories match these filters. Try lowering the minimum stars or selecting All Languages.');
+    throw new Error('No repositories match these filters. Try adjusting the star range or selecting All Languages.');
   }
-
-  // Advance next page index for subsequent batch fetches
-  state.nextPage = targetPage + 1;
 
   // Normalize incoming candidates to ensure clean schema and minimal memory footprint
   const normalizedItems = data.items.map(normalizeRepository).filter(Boolean);
 
-  // Filter out any candidates already displayed to the user
+  // Maintain unvisited pages set for balanced result distribution across available pages
+  if (!Array.isArray(state.unvisitedPages) || state.unvisitedPages.length === 0) {
+    state.unvisitedPages = Array.from({ length: state.maxPage }, (_, i) => i + 1);
+  }
+  state.unvisitedPages = state.unvisitedPages.filter((p) => p !== targetPage);
+
+  // Set the next page randomly from remaining unvisited pages to avoid descending-star bias
+  if (state.unvisitedPages.length > 0) {
+    const randIdx = Math.floor(Math.random() * state.unvisitedPages.length);
+    state.nextPage = state.unvisitedPages[randIdx];
+  } else {
+    // All accessible pages for this filter query have been visited in this cycle
+    state.unvisitedPages = Array.from({ length: state.maxPage }, (_, i) => i + 1);
+    state.nextPage = 1;
+  }
+
+  // Filter out any candidates already displayed in the session-wide history
   const freshCandidates = normalizedItems.filter((item) => !state.displayedIds.includes(item.id));
 
-  // If all items on this page were previously displayed:
+  // If all items on this page were previously displayed in session:
   if (freshCandidates.length === 0) {
-    if (state.nextPage <= state.maxPage && state.nextPage <= MAX_PAGE_LIMIT && retryCount < 2) {
-      // Advance to next page safely (bounded recursion)
+    // Try another unvisited page if available (capped at 2 retries to prevent network bursts)
+    if (state.unvisitedPages.length > 0 && retryCount < 2) {
       return await fetchCandidatesBatch(retryCount + 1);
-    } else {
-      // Reached the end of results or recursion threshold; reset history and reuse current items
-      state.displayedIds = [];
-      state.nextPage = 1;
-      return normalizedItems;
     }
+
+    // Every matching repository across all accessible search pages has already been displayed!
+    // Reset session-wide history and restart the discovery cycle.
+    state.displayedIds = [];
+    state.unvisitedPages = Array.from({ length: state.maxPage }, (_, i) => i + 1);
+    state.unvisitedPages = state.unvisitedPages.filter((p) => p !== targetPage);
+    return normalizedItems;
   }
 
   return freshCandidates;
@@ -480,7 +595,7 @@ async function getRandomRepository() {
   if (state.candidates.length === 0) {
     const newBatch = await fetchCandidatesBatch();
     if (!newBatch || newBatch.length === 0) {
-      throw new Error('No repositories match these filters. Try lowering the minimum stars or selecting All Languages.');
+      throw new Error('No repositories match these filters. Try adjusting the star range or selecting All Languages.');
     }
     state.candidates = newBatch;
   }
@@ -489,7 +604,7 @@ async function getRandomRepository() {
   const randomIndex = Math.floor(Math.random() * state.candidates.length);
   const [selectedRepo] = state.candidates.splice(randomIndex, 1);
 
-  // Track displayed ID
+  // Track displayed ID in session-wide collection
   if (selectedRepo && selectedRepo.id) {
     state.displayedIds.push(selectedRepo.id);
   }
@@ -666,20 +781,23 @@ async function handleRandomizeClick() {
 
   const randomizeBtn = document.getElementById('randomize-btn');
   const minStarsInput = document.getElementById('min-stars');
+  const maxStarsInput = document.getElementById('max-stars');
   const languageSelect = document.getElementById('language-select');
   if (!randomizeBtn) return;
 
   // 1. Read currently selected filters
   const rawMinStars = minStarsInput ? minStarsInput.value : '';
+  const rawMaxStars = maxStarsInput ? maxStarsInput.value : '';
   const selectedLanguage = languageSelect ? languageSelect.value.trim() : '';
 
   // 2. Validate inputs before constructing API request or modifying state
-  const starValidation = validateMinStars(rawMinStars);
-  if (!starValidation.valid) {
-    setStatus('error', starValidation.error);
+  const rangeValidation = validateStarRange(rawMinStars, rawMaxStars);
+  if (!rangeValidation.valid) {
+    setStatus('error', rangeValidation.error);
     return;
   }
-  const currentMinStars = starValidation.value;
+  const currentMinStars = rangeValidation.minStars;
+  const currentMaxStars = rangeValidation.maxStars;
 
   if (!ALLOWED_LANGUAGES.includes(selectedLanguage)) {
     setStatus('error', 'Please select a valid programming language.');
@@ -691,16 +809,21 @@ async function handleRandomizeClick() {
     randomizeBtn.disabled = true;
 
     // 3. Determine whether active filter configuration has changed
-    const filtersChanged = currentMinStars !== state.minStars || selectedLanguage !== state.language;
+    const filtersChanged =
+      currentMinStars !== state.minStars ||
+      currentMaxStars !== state.maxStars ||
+      selectedLanguage !== state.language;
 
-    // 4. Reset candidate pool if filter configuration changed
+    // 4. Invalidate old pool and reset pagination if filters changed
+    // NOTE: state.displayedIds is explicitly PRESERVED to maintain session-wide duplicate prevention!
     if (filtersChanged) {
       state.minStars = currentMinStars;
+      state.maxStars = currentMaxStars;
       state.language = selectedLanguage;
       state.candidates = [];
-      state.displayedIds = [];
       state.nextPage = 1;
       state.maxPage = MAX_PAGE_LIMIT;
+      state.unvisitedPages = [];
       state.currentRepo = null;
       resetResultContainer();
       saveSessionState();
@@ -765,11 +888,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Restore filter control inputs from state
   const minStarsInput = document.getElementById('min-stars');
+  const maxStarsInput = document.getElementById('max-stars');
   const languageSelect = document.getElementById('language-select');
 
   if (minStarsInput) {
     minStarsInput.value = state.minStars;
     minStarsInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleRandomizeClick();
+      }
+    });
+  }
+
+  if (maxStarsInput) {
+    maxStarsInput.value = state.maxStars;
+    maxStarsInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         handleRandomizeClick();
