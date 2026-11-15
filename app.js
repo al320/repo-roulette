@@ -28,16 +28,25 @@ const NETWORK_ERROR_DISMISS_MS = 7000;
 const ONLINE_DISMISS_MS = 4000;
 const FADE_OUT_DURATION_MS = 300;
 
+/** Default filter settings */
+const DEFAULT_MIN_STARS = 500;
+const DEFAULT_LANGUAGE = '';
+
+/** Supported programming language qualifiers */
+const ALLOWED_LANGUAGES = ['', 'python', 'javascript', 'typescript', 'java', 'cpp', 'rust', 'go'];
+
 // -----------------------------------------------------------------------------
 // Application State
 // -----------------------------------------------------------------------------
 
 const state = {
-  candidates: [],    // Array of normalized repository candidate objects remaining in current pool
-  displayedIds: [],  // Array of repository IDs already shown to avoid duplicates
-  nextPage: 1,       // Next API page number to retrieve when pool is depleted
-  maxPage: MAX_PAGE_LIMIT, // Upper bound of available pages for this query
-  currentRepo: null  // Most recently selected repository (restored on refresh)
+  minStars: DEFAULT_MIN_STARS, // Applied minimum-star value
+  language: DEFAULT_LANGUAGE,  // Applied programming language qualifier
+  candidates: [],              // Array of normalized repository candidate objects remaining in current pool
+  displayedIds: [],            // Array of repository IDs already shown to avoid duplicates
+  nextPage: 1,                 // Next API page number to retrieve when pool is depleted
+  maxPage: MAX_PAGE_LIMIT,     // Upper bound of available pages for this query
+  currentRepo: null            // Most recently selected repository (restored on refresh)
 };
 
 /** Request lock to prevent multiple concurrent API or selection calls */
@@ -80,8 +89,48 @@ function normalizeRepository(raw) {
 }
 
 // -----------------------------------------------------------------------------
-// Date & URL Utility Functions
+// Validation & Utility Functions
 // -----------------------------------------------------------------------------
+
+/**
+ * Validates the minimum stars input value.
+ * Allows non-negative whole numbers (0, 1, 2, ...).
+ * Rejects empty, negative, decimal or invalid values and provides a descriptive message.
+ * @param {string|number} rawValue - Raw input from number field.
+ * @returns {{ valid: boolean, value?: number, error?: string }} Validation result.
+ */
+function validateMinStars(rawValue) {
+  if (rawValue === null || rawValue === undefined) {
+    return { valid: false, error: 'Please enter a minimum star count.' };
+  }
+
+  const str = String(rawValue).trim();
+  if (str === '') {
+    return { valid: false, error: 'Please enter a minimum star count.' };
+  }
+
+  // Reject decimal values
+  if (str.includes('.')) {
+    return { valid: false, error: 'Minimum stars must be a whole number.' };
+  }
+
+  // Reject negative values
+  if (str.startsWith('-')) {
+    return { valid: false, error: 'Minimum stars must be 0 or greater.' };
+  }
+
+  // Reject anything that is not solely ASCII digits
+  if (!/^\d+$/.test(str)) {
+    return { valid: false, error: 'Minimum stars must be a valid whole number.' };
+  }
+
+  const parsed = Number(str);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    return { valid: false, error: 'Minimum stars must be a valid non-negative integer.' };
+  }
+
+  return { valid: true, value: parsed };
+}
 
 /**
  * Dynamically calculates the ISO cutoff date (YYYY-MM-DD) for 12 months ago.
@@ -94,16 +143,34 @@ function getCutoffDate() {
 }
 
 /**
- * Constructs the GitHub Search API URL with appropriate query parameters.
+ * Constructs the GitHub Search API URL with dynamic minimum stars,
+ * pushed cutoff date, and optional programming language qualifier.
  * @param {number} page - Page number to request.
+ * @param {number} minStars - Validated minimum star count.
+ * @param {string} language - Programming language qualifier (empty string for all).
  * @returns {string} Fully formed API URL.
  */
-function buildApiUrl(page = 1) {
+function buildApiUrl(page = 1, minStars = state.minStars, language = state.language) {
+  const starValidation = validateMinStars(minStars);
+  if (!starValidation.valid) {
+    throw new Error(starValidation.error);
+  }
+  const safeMinStars = starValidation.value;
+
   const cutoffDate = getCutoffDate();
   const safePage = Math.max(1, Math.min(MAX_PAGE_LIMIT, Math.floor(page)));
 
+  const queryParts = [
+    `stars:>=${safeMinStars}`,
+    `pushed:>=${cutoffDate}`
+  ];
+
+  if (typeof language === 'string' && language.trim() !== '') {
+    queryParts.push(`language:${language.trim()}`);
+  }
+
   const params = new URLSearchParams({
-    q: `stars:>=500 pushed:>=${cutoffDate}`,
+    q: queryParts.join(' '),
     sort: 'stars',
     order: 'desc',
     per_page: String(PER_PAGE),
@@ -123,6 +190,8 @@ function buildApiUrl(page = 1) {
 function saveSessionState() {
   try {
     const payload = JSON.stringify({
+      minStars: state.minStars,
+      language: state.language,
       candidates: state.candidates,
       displayedIds: state.displayedIds,
       nextPage: state.nextPage,
@@ -149,11 +218,23 @@ function loadSessionState() {
 
     if (
       parsed &&
+      typeof parsed === 'object' &&
       Array.isArray(parsed.candidates) &&
       Array.isArray(parsed.displayedIds) &&
       Number.isInteger(parsed.nextPage) &&
       parsed.nextPage >= 1
     ) {
+      // Validate minStars from storage
+      const starValidation = validateMinStars(parsed.minStars);
+      const minStars = starValidation.valid ? starValidation.value : DEFAULT_MIN_STARS;
+
+      // Validate language from storage
+      const language = typeof parsed.language === 'string' && ALLOWED_LANGUAGES.includes(parsed.language)
+        ? parsed.language
+        : DEFAULT_LANGUAGE;
+
+      state.minStars = minStars;
+      state.language = language;
       state.candidates = parsed.candidates.map(normalizeRepository).filter(Boolean);
       state.displayedIds = parsed.displayedIds.filter((id) => typeof id === 'number' || typeof id === 'string');
       state.nextPage = Math.min(MAX_PAGE_LIMIT, parsed.nextPage);
@@ -168,6 +249,8 @@ function loadSessionState() {
   }
 
   // Fallback to clean state
+  state.minStars = DEFAULT_MIN_STARS;
+  state.language = DEFAULT_LANGUAGE;
   state.candidates = [];
   state.displayedIds = [];
   state.nextPage = 1;
@@ -268,7 +351,7 @@ async function fetchCandidatesBatch(retryCount = 0) {
   }
 
   const targetPage = state.nextPage;
-  const requestUrl = buildApiUrl(targetPage);
+  const requestUrl = buildApiUrl(targetPage, state.minStars, state.language);
 
   let response;
   try {
@@ -359,7 +442,7 @@ async function fetchCandidatesBatch(retryCount = 0) {
         return await fetchCandidatesBatch(retryCount + 1);
       }
     }
-    throw new Error('No repositories found matching the search criteria.');
+    throw new Error('No repositories match these filters. Try lowering the minimum stars or selecting All Languages.');
   }
 
   // Advance next page index for subsequent batch fetches
@@ -397,7 +480,7 @@ async function getRandomRepository() {
   if (state.candidates.length === 0) {
     const newBatch = await fetchCandidatesBatch();
     if (!newBatch || newBatch.length === 0) {
-      throw new Error('No repositories currently available to display.');
+      throw new Error('No repositories match these filters. Try lowering the minimum stars or selecting All Languages.');
     }
     state.candidates = newBatch;
   }
@@ -561,18 +644,67 @@ function renderRepositoryCard(repo) {
 // -----------------------------------------------------------------------------
 
 /**
+ * Resets the #result-container back to the initial empty state message.
+ */
+function resetResultContainer() {
+  const container = document.getElementById('result-container');
+  if (!container) return;
+  container.textContent = '';
+  const p = document.createElement('p');
+  p.className = 'empty-state-message';
+  p.textContent = 'Ready to discover something?';
+  container.appendChild(p);
+}
+
+/**
  * Handles clicks on the "Randomize" button.
- * Coordinates candidate retrieval, button lock, status messaging, and rendering.
+ * Coordinates filter validation, change detection, candidate retrieval,
+ * button lock, status messaging, and rendering.
  */
 async function handleRandomizeClick() {
   if (isProcessing) return;
 
   const randomizeBtn = document.getElementById('randomize-btn');
+  const minStarsInput = document.getElementById('min-stars');
+  const languageSelect = document.getElementById('language-select');
   if (!randomizeBtn) return;
+
+  // 1. Read currently selected filters
+  const rawMinStars = minStarsInput ? minStarsInput.value : '';
+  const selectedLanguage = languageSelect ? languageSelect.value.trim() : '';
+
+  // 2. Validate inputs before constructing API request or modifying state
+  const starValidation = validateMinStars(rawMinStars);
+  if (!starValidation.valid) {
+    setStatus('error', starValidation.error);
+    return;
+  }
+  const currentMinStars = starValidation.value;
+
+  if (!ALLOWED_LANGUAGES.includes(selectedLanguage)) {
+    setStatus('error', 'Please select a valid programming language.');
+    return;
+  }
 
   try {
     isProcessing = true;
     randomizeBtn.disabled = true;
+
+    // 3. Determine whether active filter configuration has changed
+    const filtersChanged = currentMinStars !== state.minStars || selectedLanguage !== state.language;
+
+    // 4. Reset candidate pool if filter configuration changed
+    if (filtersChanged) {
+      state.minStars = currentMinStars;
+      state.language = selectedLanguage;
+      state.candidates = [];
+      state.displayedIds = [];
+      state.nextPage = 1;
+      state.maxPage = MAX_PAGE_LIMIT;
+      state.currentRepo = null;
+      resetResultContainer();
+      saveSessionState();
+    }
 
     // Display appropriate loading message based on cache state
     if (state.candidates.length === 0) {
@@ -581,7 +713,10 @@ async function handleRandomizeClick() {
       setStatus('loading', 'Selecting a repository...');
     }
 
+    // 5 & 6. Fetch matching repositories if pool is empty and pick a random repository
     const repo = await getRandomRepository();
+
+    // 7. Render repository card
     renderRepositoryCard(repo);
     clearStatus();
   } catch (error) {
@@ -602,7 +737,7 @@ async function handleRandomizeClick() {
         NETWORK_ERROR_DISMISS_MS
       );
     } else {
-      // Non-network errors (e.g., rate limits) stay persistent until user action
+      // Non-network errors (e.g., rate limits, empty results) stay persistent until user action
       setStatus('error', error.message || 'An unexpected error occurred. Please try again.');
     }
   } finally {
@@ -627,6 +762,30 @@ window.addEventListener('online', () => {
 document.addEventListener('DOMContentLoaded', () => {
   // Restore persisted state from sessionStorage if present
   const hasRestored = loadSessionState();
+
+  // Restore filter control inputs from state
+  const minStarsInput = document.getElementById('min-stars');
+  const languageSelect = document.getElementById('language-select');
+
+  if (minStarsInput) {
+    minStarsInput.value = state.minStars;
+    minStarsInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleRandomizeClick();
+      }
+    });
+  }
+
+  if (languageSelect) {
+    languageSelect.value = state.language;
+    languageSelect.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleRandomizeClick();
+      }
+    });
+  }
 
   // If a repository was previously active during this session, re-render it
   if (hasRestored && state.currentRepo) {
