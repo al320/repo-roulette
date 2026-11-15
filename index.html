@@ -14,6 +14,48 @@
     </header>
 
     <main id="main-content">
+      <div class="filters-container">
+        <div class="filter-group">
+          <label for="min-stars" class="filter-label">Minimum Stars</label>
+          <input
+            type="number"
+            id="min-stars"
+            name="min-stars"
+            class="filter-input"
+            value="500"
+            min="0"
+            step="1"
+          >
+        </div>
+
+        <div class="filter-group">
+          <label for="max-stars" class="filter-label">Maximum Stars</label>
+          <input
+            type="number"
+            id="max-stars"
+            name="max-stars"
+            class="filter-input"
+            value="100000"
+            min="0"
+            step="1"
+          >
+        </div>
+
+        <div class="filter-group">
+          <label for="language-select" class="filter-label">Programming Language</label>
+          <select id="language-select" name="language" class="filter-select">
+            <option value="">All Languages</option>
+            <option value="python">Python</option>
+            <option value="javascript">JavaScript</option>
+            <option value="typescript">TypeScript</option>
+            <option value="java">Java</option>
+            <option value="cpp">C++</option>
+            <option value="rust">Rust</option>
+            <option value="go">Go</option>
+          </select>
+        </div>
+      </div>
+
       <div class="action-group">
         <button type="button" id="randomize-btn" class="randomize-button">
           Randomize
